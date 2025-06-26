@@ -1,61 +1,119 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
-// Define maximum sequence and pattern sizes
-#define MAX_SEQ_LEN 1000000
-#define MAX_PATTERN_LEN 100
 
-// Function to perform a naive substring search in a genomic sequence
-void search_pattern_serial(const char *sequence, const char *pattern) {
-    int seq_len = strlen(sequence);   // Length of the main sequence
-    int pat_len = strlen(pattern);    // Length of the pattern to search
-
-    printf("Pattern found at positions: ");
-
-    // Slide a window over the sequence from position 0 to (N - M)
-    for (int i = 0; i <= seq_len - pat_len; i++) {
-        // Compare substring starting at index i with the pattern
-        if (strncmp(&sequence[i], pattern, pat_len) == 0) {
-            // Pattern match found at index i
-            printf("%d ", i);
-        }
-    }
-
-    printf("\n"); 
-}
-
-int main(int argc, char *argv[]) {
-    // Ensure the user provides exactly 2 arguments: <filename> and <pattern>
-    if (argc < 3) {
-        printf("Usage: %s <sequence_file> <pattern>\n", argv[0]);
-        return 1;
-    }
-
-    // Attempt to open the sequence file in read mode
-    FILE *file = fopen(argv[1], "r");
+// Load entire file (multi-line) into a single dynamically allocated string
+char *load_sequence(const char *filename) {
+    FILE *file = fopen(filename, "r");
     if (!file) {
         perror("Error opening file");
-        return 1;
+        return NULL;
     }
 
-    // Dynamically allocate memory for the sequence
-    char *sequence = malloc(MAX_SEQ_LEN);
+    size_t capacity = 1024;  // Initial buffer capacity
+    size_t length = 0;       // Current length of the sequence
+    char *sequence = malloc(capacity);
     if (!sequence) {
         perror("Memory allocation failed");
-        return 1;
+        fclose(file);
+        return NULL;
     }
 
-    // Read the sequence from the file into memory
-    // Assumes the sequence is on a single line with no whitespace
-    fscanf(file, "%s", sequence);
-    fclose(file);  // Close the file after reading
+    char line[1024];
+    // Read file line by line
+    while (fgets(line, sizeof(line), file)) {
+        // Remove newline character if present
+        size_t linelen = strlen(line);
+        if (linelen > 0 && line[linelen - 1] == '\n') {
+            line[linelen - 1] = '\0';
+            linelen--;
+        }
 
-    // Call the substring search function
-    search_pattern_serial(sequence, argv[2]);
+        // Check if the current buffer can hold the new line plus null terminator
+        if (length + linelen + 1 > capacity) {
+            // Increase capacity (doubling strategy)
+            capacity = (length + linelen + 1) * 2;
+            char *temp = realloc(sequence, capacity);
+            if (!temp) {
+                perror("Memory reallocation failed");
+                free(sequence);
+                fclose(file);
+                return NULL;
+            }
+            sequence = temp;
+        }
 
-    // Free the dynamically allocated memory
+        // Append the current line (without newline) to the sequence buffer
+        memcpy(sequence + length, line, linelen);
+        length += linelen;
+    }
+
+    // Null-terminate the full sequence string
+    sequence[length] = '\0';
+
+    fclose(file);
+    return sequence;
+}
+
+// Naive substring search
+int search_pattern_serial(const char *sequence, const char *pattern) {
+    int seq_len = strlen(sequence);
+    int pat_len = strlen(pattern);
+    int matches = 0;
+
+    printf("Pattern found at positions: ");
+    for (int i = 0; i <= seq_len - pat_len; i++) {
+        if (strncmp(&sequence[i], pattern, pat_len) == 0) {
+            printf("%d ", i);
+            matches++;
+        }
+    }
+    printf("\n");
+    return matches;
+}
+
+// Time wrapper for search
+double measure_search_time(const char *sequence, const char *pattern, int *match_count) {
+    clock_t start = clock();
+    *match_count = search_pattern_serial(sequence, pattern);
+    clock_t end = clock();
+    return (double)(end - start) / CLOCKS_PER_SEC;
+}
+
+// Main
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        printf("Usage: %s <sequence_file> <pattern>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    char *sequence = load_sequence(argv[1]);
+    if (!sequence) {
+        return EXIT_FAILURE;
+    }
+
+    int match_count = 0;
+    double elapsed = measure_search_time(sequence, argv[2], &match_count);
+
+    printf("Total matches: %d\n", match_count);
+    printf("Execution time: %.6f seconds\n", elapsed);
+
+        // Log su file CSV
+    FILE *log = fopen("log.csv", "a");  // Append mode
+    if (log) {
+        fprintf(log, "%s,%d,%.6f,%s\n", argv[2], match_count, elapsed, argv[1]);
+        fclose(log);
+    } else {
+        perror("Error writing log.csv");
+    }
+ //Script Python 
+	int ret = system("python \"C:/Users/lucav/Desktop/ACA-main/src/Graph_TIME.py\"");
+    if (ret != 0) {
+        fprintf(stderr, "Errore durante l'esecuzione dello script Python.\n");
+    }
+
     free(sequence);
-
-    return 0; 
+    return EXIT_SUCCESS;
 }

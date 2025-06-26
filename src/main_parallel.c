@@ -1,77 +1,144 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <mpi.h>
+#include <omp.h>
 
-#define MAX_SEQ_LEN 1000000      // Maximum size of the sequence
-#define MAX_PATTERN_LEN 100      // Maximum size of the pattern
+#define MAX_MATCHES 10000000
+#define MAX_THREADS 128
 
-void search_pattern_parallel(char *sequence, char *pattern, int seq_len, int pat_len, int rank, int size) {
-    // Divide the sequence among processes (simple block decomposition)
-    int chunk = seq_len / size;           // Approximate chunk size
-    int start = rank * chunk;             // Start index for this process
-    int end = (rank == size - 1) ? seq_len : start + chunk + pat_len - 1;
-
-    // Add (pat_len - 1) to avoid missing matches across chunk boundaries
-
-    printf("Process %d searching from %d to %d\n", rank, start, end);
-
-    // Each process searches its assigned chunk
-    for (int i = start; i <= end - pat_len; i++) {
-        if (strncmp(&sequence[i], pattern, pat_len) == 0) {
-            printf("Process %d found pattern at index %d\n", rank, i);
-        }
+// Carica la sequenza da file (tutto in una stringa)
+char *load_sequence(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("Error opening file");
+        return NULL;
     }
+
+    size_t capacity = 1024;
+    size_t length = 0;
+    char *sequence = malloc(capacity);
+    if (!sequence) {
+        perror("Memory allocation failed");
+        fclose(file);
+        return NULL;
+    }
+
+    char line[1024];
+    while (fgets(line, sizeof(line), file)) {
+        size_t linelen = strlen(line);
+        if (linelen > 0 && line[linelen - 1] == '\n') {
+            line[--linelen] = '\0';
+        }
+
+        if (length + linelen + 1 > capacity) {
+            capacity = (length + linelen + 1) * 2;
+            char *temp = realloc(sequence, capacity);
+            if (!temp) {
+                perror("Memory reallocation failed");
+                free(sequence);
+                fclose(file);
+                return NULL;
+            }
+            sequence = temp;
+        }
+
+        memcpy(sequence + length, line, linelen);
+        length += linelen;
+    }
+
+    sequence[length] = '\0';
+    fclose(file);
+    return sequence;
 }
 
+// Ricerca parallela ottimizzata: nessun critical, uso di buffer locali
+int search_pattern_parallel(const char *sequence, const char *pattern, int *positions) {
+    int seq_len = strlen(sequence);
+    int pat_len = strlen(pattern);
+    int total_matches = 0;
+
+    int thread_matches[MAX_THREADS] = {0};
+    int *thread_positions[MAX_THREADS];
+
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        int local_count = 0;
+        int *local_positions = malloc(sizeof(int) * MAX_MATCHES / omp_get_num_threads());
+        if (!local_positions) {
+            fprintf(stderr, "Memory allocation failed for thread %d\n", tid);
+            exit(1);
+        }
+
+        #pragma omp for schedule(static)
+        for (int i = 0; i <= seq_len - pat_len; i++) {
+            if (strncmp(&sequence[i], pattern, pat_len) == 0) {
+                local_positions[local_count++] = i;
+            }
+        }
+
+        thread_positions[tid] = local_positions;
+        thread_matches[tid] = local_count;
+    }
+
+    // Fondere i risultati
+    for (int t = 0; t < MAX_THREADS; t++) {
+        if (thread_matches[t] > 0) {
+            memcpy(&positions[total_matches], thread_positions[t], thread_matches[t] * sizeof(int));
+            total_matches += thread_matches[t];
+            free(thread_positions[t]);
+        }
+    }
+
+    return total_matches;
+}
+
+double measure_search_time_parallel(const char *sequence, const char *pattern, int *positions, int *match_count) {
+    double start = omp_get_wtime();
+    *match_count = search_pattern_parallel(sequence, pattern, positions);
+    double end = omp_get_wtime();
+    return end - start;
+}
 
 int main(int argc, char *argv[]) {
-    int rank, size;
-
-    // Initialize the MPI environment
-    MPI_Init(&argc, &argv);
-
-    // Get the current process rank and the total number of processes
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
-
-    // Check for correct command-line arguments (done only by rank 0)
-    if (argc < 3) {
-        if (rank == 0)
-            printf("Usage: %s <sequence_file> <pattern>\n", argv[0]);
-        MPI_Finalize();
-        return 1;
+    if (argc != 3) {
+        printf("Usage: %s <sequence_file> <pattern>\n", argv[0]);
+        return EXIT_FAILURE;
     }
 
-    char *pattern = argv[2];                  // Pattern to search
-    int pat_len = strlen(pattern);            // Length of the pattern
-    char *sequence = malloc(MAX_SEQ_LEN);     // Allocate buffer for the sequence
+    char *sequence = load_sequence(argv[1]);
+    if (!sequence) return EXIT_FAILURE;
 
-
-    // Rank 0 reads the input sequence from file
-    if (rank == 0) {
-        FILE *file = fopen(argv[1], "r");
-        if (!file) {
-            perror("Error opening file");
-            MPI_Abort(MPI_COMM_WORLD, 1);     // Abort all processes if file fails
-        }
-        fscanf(file, "%s", sequence);         // Read the entire sequence as a single string
-        fclose(file);
+    int *positions = malloc(sizeof(int) * MAX_MATCHES);
+    if (!positions) {
+        perror("Position allocation failed");
+        free(sequence);
+        return EXIT_FAILURE;
     }
 
-    // Share pattern length with all processes
-    MPI_Bcast(&pat_len, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    int match_count = 0;
+    double elapsed = measure_search_time_parallel(sequence, argv[2], positions, &match_count);
 
-    // Broadcast pattern itself
-    MPI_Bcast(pattern, pat_len, MPI_CHAR, 0, MPI_COMM_WORLD);
+    printf("Total matches: %d\n", match_count);
+    printf("Execution time: %.6f seconds\n", elapsed);
 
-    // Broadcast the full sequence to all processes
-    MPI_Bcast(sequence, MAX_SEQ_LEN, MPI_CHAR, 0, MPI_COMM_WORLD);
+    // (Opzionale) stampa le posizioni
+    // printf("Positions: ");
+    // for (int i = 0; i < match_count; i++) {
+    //     printf("%d ", positions[i]);
+    // }
+    // printf("\n");
 
-    // Each process performs its portion of the search
-    search_pattern_parallel(sequence, pattern, strlen(sequence), pat_len, rank, size);
+    // Logging
+    FILE *log = fopen("log_parallel.csv", "a");
+    if (log) {
+        fprintf(log, "%s,%d,%.6f,%s\n", argv[2], match_count, elapsed, argv[1]);
+        fclose(log);
+    } else {
+        perror("Error writing log.csv");
+    }
 
-    free(sequence);        // Free allocated memory
-    MPI_Finalize();        // Shut down the MPI environment
-    return 0;
+    free(positions);
+    free(sequence);
+    return EXIT_SUCCESS;
 }
