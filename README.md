@@ -19,6 +19,17 @@ This will compile the following:
 
 ---
 
+## Dataset Preparation (Running on Google Cloud)
+
+Per testare la vera scalabilità (Strong/Weak) sul cloud, il progetto utilizza l'intero genoma umano di riferimento (GRCh38, circa 3.2 GB estratti).
+
+```bash
+wget https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/reference/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_genomic.fna.gz
+gunzip GCF_000001405.40_GRCh38.p14_genomic.fna.gz
+```
+
+---
+
 ### Run the Serial Version
 
 Once compiled, you can run the serial version like this:
@@ -46,14 +57,14 @@ To run the OpenMP version:
 
 ### Run the Parallel Version (MPI)
 
-To run the MPI version, use `mpiexec` and specify the number of processes (e.g., 4):
+To run the MPI version, use `mpiexec` and specify the number of processes (e.g., 8):
 
 ```bash
-mpiexec -n 4 ./parallel_mpi data/test_dna.txt ACGTA
+mpiexec -n 8 ./parallel_mpi GCF_000001405.40_GRCh38.p14_genomic.fna ACGTA
 ```
 
 This command will:
-- Launch 4 MPI processes
+- Launch 8 MPI processes
 - Each process searches a portion of the sequence
 - Rank 0 will consolidate and report the matching count
 
