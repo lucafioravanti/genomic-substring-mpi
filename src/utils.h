@@ -25,6 +25,8 @@ static inline char *load_sequence(const char *filename) {
     char line[1024];
     // Read file line by line
     while (fgets(line, sizeof(line), file)) {
+        if (line[0] == '>') continue;
+
         // Remove newline character if present
         size_t linelen = strlen(line);
         if (linelen > 0 && line[linelen - 1] == '\n') {

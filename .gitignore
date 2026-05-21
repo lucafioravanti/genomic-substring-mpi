@@ -63,3 +63,7 @@ __MACOSX/
 parallel_omp
 parallel_mpi
 *.csv
+serial
+parallel_omp
+parallel_mpi
+*.csv
