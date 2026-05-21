@@ -25,7 +25,10 @@ int search_pattern_parallel(const char *sequence, const char *pattern, int *posi
     {
         int tid = omp_get_thread_num();
         int local_count = 0;
-        int *local_positions = malloc(sizeof(int) * MAX_MATCHES / omp_get_num_threads());
+        size_t local_capacity = MAX_MATCHES / omp_get_num_threads();
+        if (local_capacity == 0) local_capacity = 1024; // fallback
+
+        int *local_positions = malloc(sizeof(int) * local_capacity);
         if (!local_positions) {
             fprintf(stderr, "Memory allocation failed for thread %d\n", tid);
             exit(1);
@@ -34,6 +37,16 @@ int search_pattern_parallel(const char *sequence, const char *pattern, int *posi
         #pragma omp for schedule(static)
         for (int i = 0; i <= seq_len - pat_len; i++) {
             if (strncmp(&sequence[i], pattern, pat_len) == 0) {
+                if (local_count >= local_capacity) {
+                    local_capacity *= 2;
+                    int *temp = realloc(local_positions, sizeof(int) * local_capacity);
+                    if (!temp) {
+                        fprintf(stderr, "Memory reallocation failed for thread %d\n", tid);
+                        free(local_positions);
+                        exit(1);
+                    }
+                    local_positions = temp;
+                }
                 local_positions[local_count++] = i;
             }
         }
