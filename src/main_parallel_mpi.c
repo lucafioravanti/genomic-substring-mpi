@@ -5,18 +5,13 @@
 #include "utils.h"
 
 // Funzione di ricerca del pattern nella porzione assegnata
-int search_pattern_parallel(char *sequence, char *pattern, int seq_len, int pat_len, int rank, int size) {
+int search_pattern_local(char *local_sequence, char *pattern, int local_len, int pat_len) {
     int matches = 0;
 
-    int chunk = seq_len / size;
-    int start = rank * chunk;
-    int end = (rank == size - 1) ? seq_len : start + chunk + pat_len - 1;
-
     // Cerca nella porzione assegnata (con overlap)
-    for (int i = start; i <= end - pat_len; i++) {
-        if (strncmp(&sequence[i], pattern, pat_len) == 0) {
+    for (int i = 0; i <= local_len - pat_len; i++) {
+        if (strncmp(&local_sequence[i], pattern, pat_len) == 0) {
             matches++;
-            // printf("Process %d found pattern at index %d\n", rank, i); 
         }
     }
 
@@ -52,21 +47,37 @@ int main(int argc, char *argv[]) {
         seq_len = strlen(sequence);
     }
 
-    // Broadcast sequence length
+    // Broadcast sequence length and pattern info
     MPI_Bcast(&seq_len, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&pat_len, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(pattern, pat_len, MPI_CHAR, 0, MPI_COMM_WORLD);
 
-    // Allocate memory on all other ranks
-    if (rank != 0) {
-        sequence = malloc(seq_len + 1);
-        if (!sequence) {
-            MPI_Abort(MPI_COMM_WORLD, 1);
+    int chunk = seq_len / size;
+    int start = rank * chunk;
+    int end = (rank == size - 1) ? seq_len : start + chunk + pat_len - 1;
+    int local_len = end - start;
+
+    char *local_sequence = malloc(local_len + 1);
+    if (!local_sequence) {
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    int *sendcounts = NULL;
+    int *displs = NULL;
+
+    if (rank == 0) {
+        sendcounts = malloc(size * sizeof(int));
+        displs = malloc(size * sizeof(int));
+        for (int i = 0; i < size; i++) {
+            int st = i * chunk;
+            int en = (i == size - 1) ? seq_len : st + chunk + pat_len - 1;
+            sendcounts[i] = en - st;
+            displs[i] = st;
         }
     }
 
-    // Broadcast pattern_len, pattern and sequence
-    MPI_Bcast(&pat_len, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(pattern, pat_len, MPI_CHAR, 0, MPI_COMM_WORLD);
-    MPI_Bcast(sequence, seq_len + 1, MPI_CHAR, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(sequence, sendcounts, displs, MPI_CHAR, local_sequence, local_len, MPI_CHAR, 0, MPI_COMM_WORLD);
+    local_sequence[local_len] = '\0';
 
     // Misura il tempo solo in rank 0
     if (rank == 0) {
@@ -74,13 +85,13 @@ int main(int argc, char *argv[]) {
     }
 
     // Ogni processo esegue la ricerca
-    int local_matches = search_pattern_parallel(sequence, pattern, seq_len, pat_len, rank, size);
+    int local_matches = search_pattern_local(local_sequence, pattern, local_len, pat_len);
 
     // Riduce il numero di match totali su rank 0
     int total_matches = 0;
     MPI_Reduce(&local_matches, &total_matches, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    // Rank 0 stampa risultati e tempo
+    // Misura il tempo solo in rank 0 e stampa i risultati
     if (rank == 0) {
         end_time = MPI_Wtime();
         double elapsed = end_time - start_time;
@@ -98,7 +109,12 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    free(sequence);
+    if (rank == 0) {
+        free(sequence);
+        free(sendcounts);
+        free(displs);
+    }
+    free(local_sequence);
     MPI_Finalize();
     return EXIT_SUCCESS;
 }
