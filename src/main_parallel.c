@@ -2,54 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <omp.h>
+#include "utils.h"
 
 #define MAX_MATCHES 10000000
-#define MAX_THREADS 128
-
-// Carica la sequenza da file (tutto in una stringa)
-char *load_sequence(const char *filename) {
-    FILE *file = fopen(filename, "r");
-    if (!file) {
-        perror("Error opening file");
-        return NULL;
-    }
-
-    size_t capacity = 1024;
-    size_t length = 0;
-    char *sequence = malloc(capacity);
-    if (!sequence) {
-        perror("Memory allocation failed");
-        fclose(file);
-        return NULL;
-    }
-
-    char line[1024];
-    while (fgets(line, sizeof(line), file)) {
-        size_t linelen = strlen(line);
-        if (linelen > 0 && line[linelen - 1] == '\n') {
-            line[--linelen] = '\0';
-        }
-
-        if (length + linelen + 1 > capacity) {
-            capacity = (length + linelen + 1) * 2;
-            char *temp = realloc(sequence, capacity);
-            if (!temp) {
-                perror("Memory reallocation failed");
-                free(sequence);
-                fclose(file);
-                return NULL;
-            }
-            sequence = temp;
-        }
-
-        memcpy(sequence + length, line, linelen);
-        length += linelen;
-    }
-
-    sequence[length] = '\0';
-    fclose(file);
-    return sequence;
-}
 
 // Ricerca parallela ottimizzata: nessun critical, uso di buffer locali
 int search_pattern_parallel(const char *sequence, const char *pattern, int *positions) {
@@ -57,8 +12,14 @@ int search_pattern_parallel(const char *sequence, const char *pattern, int *posi
     int pat_len = strlen(pattern);
     int total_matches = 0;
 
-    int thread_matches[MAX_THREADS] = {0};
-    int *thread_positions[MAX_THREADS];
+    int max_threads = omp_get_max_threads();
+    int *thread_matches = calloc(max_threads, sizeof(int));
+    int **thread_positions = malloc(max_threads * sizeof(int *));
+
+    if (!thread_matches || !thread_positions) {
+        perror("Memory allocation failed");
+        exit(1);
+    }
 
     #pragma omp parallel
     {
@@ -82,13 +43,18 @@ int search_pattern_parallel(const char *sequence, const char *pattern, int *posi
     }
 
     // Fondere i risultati
-    for (int t = 0; t < MAX_THREADS; t++) {
+    for (int t = 0; t < max_threads; t++) {
         if (thread_matches[t] > 0) {
             memcpy(&positions[total_matches], thread_positions[t], thread_matches[t] * sizeof(int));
             total_matches += thread_matches[t];
+        }
+        if (thread_positions[t]) {
             free(thread_positions[t]);
         }
     }
+
+    free(thread_matches);
+    free(thread_positions);
 
     return total_matches;
 }

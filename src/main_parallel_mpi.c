@@ -2,9 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <mpi.h>
-
-#define MAX_SEQ_LEN 1000000      // Dimensione massima della sequenza
-#define MAX_PATTERN_LEN 100      // Lunghezza massima del pattern
+#include "utils.h"
 
 // Funzione di ricerca del pattern nella porzione assegnata
 int search_pattern_parallel(char *sequence, char *pattern, int seq_len, int pat_len, int rank, int size) {
@@ -42,23 +40,33 @@ int main(int argc, char *argv[]) {
 
     char *pattern = argv[2];
     int pat_len = strlen(pattern);
-    char *sequence = malloc(MAX_SEQ_LEN);
+    char *sequence = NULL;
+    int seq_len = 0;
 
-    // Rank 0 legge il file
+    // Rank 0 legge il file e determina la lunghezza
     if (rank == 0) {
-        FILE *file = fopen(argv[1], "r");
-        if (!file) {
-            perror("Error opening file");
+        sequence = load_sequence(argv[1]);
+        if (!sequence) {
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        fscanf(file, "%s", sequence);
-        fclose(file);
+        seq_len = strlen(sequence);
     }
 
-    // Broadcast pattern e pattern_len
+    // Broadcast sequence length
+    MPI_Bcast(&seq_len, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Allocate memory on all other ranks
+    if (rank != 0) {
+        sequence = malloc(seq_len + 1);
+        if (!sequence) {
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+
+    // Broadcast pattern_len, pattern and sequence
     MPI_Bcast(&pat_len, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(pattern, pat_len, MPI_CHAR, 0, MPI_COMM_WORLD);
-    MPI_Bcast(sequence, MAX_SEQ_LEN, MPI_CHAR, 0, MPI_COMM_WORLD);
+    MPI_Bcast(sequence, seq_len + 1, MPI_CHAR, 0, MPI_COMM_WORLD);
 
     // Misura il tempo solo in rank 0
     if (rank == 0) {
@@ -66,7 +74,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Ogni processo esegue la ricerca
-    int local_matches = search_pattern_parallel(sequence, pattern, strlen(sequence), pat_len, rank, size);
+    int local_matches = search_pattern_parallel(sequence, pattern, seq_len, pat_len, rank, size);
 
     // Riduce il numero di match totali su rank 0
     int total_matches = 0;

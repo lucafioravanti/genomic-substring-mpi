@@ -59,4 +59,7 @@ desktop.ini
 *.bak
 *.old
 __MACOSX/
-._*
+._*serial
+parallel_omp
+parallel_mpi
+*.csv
